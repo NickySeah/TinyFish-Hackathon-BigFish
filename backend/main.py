@@ -1,14 +1,21 @@
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import httpx
+import psycopg2
 import vt
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from config import settings, validate_settings
+from schemas import ScanCreate, ScanUpdate
+from supabase_client import get_anon_client
 
 load_dotenv()
 
@@ -21,6 +28,9 @@ A security-analysis orchestration service exposing individual endpoints for:
 - **VirusTotal** – Scan and retrieve reputation data for URLs.
 - **OpenAI** – Analyse scraped website content for phishing indicators.
 - **TinyFish** – Automate browser-based tasks via SSE event streams.
+- **Scans** – CRUD operations for scan records persisted in Supabase.
+- **URL Sources** – Track where analysed URLs originated.
+- **Analysis** – Full scan orchestration with database persistence.
 
 Interactive docs are available at `/docs` (Swagger UI) and `/redoc` (ReDoc).
 """
@@ -42,12 +52,28 @@ tags_metadata = [
         "name": "TinyFish",
         "description": "Run browser-automation tasks via TinyFish with real-time SSE streaming.",
     },
+    {
+        "name": "Scans",
+        "description": "CRUD operations for scan records in Supabase.",
+    },
+    {
+        "name": "URL Sources",
+        "description": "Track and query URL source records.",
+    },
+    {
+        "name": "Analysis",
+        "description": "Full scan orchestration with database persistence.",
+    },
+    {
+        "name": "Stats",
+        "description": "Summary statistics for scans.",
+    },
 ]
 
 app = FastAPI(
     title="BigFish API",
-    summary="Individual endpoints for VirusTotal, OpenAI, and TinyFish.",
-    version="1.0.0",
+    summary="Individual endpoints for VirusTotal, OpenAI, TinyFish, and Supabase-backed scan persistence.",
+    version="2.0.0",
     description=description,
     openapi_tags=tags_metadata,
     contact={
@@ -80,6 +106,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 TINYFISH_API_KEY = os.getenv("TINYFISH_API_KEY")
 TINYFISH_BROWSER_PROFILE = os.getenv("TINYFISH_BROWSER_PROFILE", "stealth")
 TINYFISH_BASE_URL = "https://agent.tinyfish.ai"
+
+# Database
+DATABASE_URL = os.getenv("DATABASE_URL", settings.database_url)
+DEFAULT_SCAN_EXPIRY_DAYS = 7
+
+
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL)
 
 
 # ---------------------------------------------------------------------------
@@ -606,4 +640,301 @@ async def tinyfish(request: TinyFishRequest) -> StreamingResponse:
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Database health
+# ---------------------------------------------------------------------------
+@app.get(
+    "/health/db",
+    tags=["Health"],
+    summary="Database health check",
+    description="Checks that the database is reachable.",
+)
+def database_health_check() -> dict[str, str]:
+    try:
+        conn = get_db_connection()
+        conn.close()
+        return {"database": "connected"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(exc)}") from exc
+
+
+# ---------------------------------------------------------------------------
+# URL Sources
+# ---------------------------------------------------------------------------
+@app.get("/url-sources", tags=["URL Sources"], summary="List all URL sources")
+def list_url_sources():
+    try:
+        client = get_anon_client()
+        response = client.table("url_sources").select("*").order("created_at", desc=True).execute()
+        return {"data": response.data}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch url sources: {str(exc)}") from exc
+
+
+@app.get("/url-sources/by-url", tags=["URL Sources"], summary="Get URL sources by URL")
+def get_url_sources_by_url(url: str = Query(..., description="Exact URL string from url_sources.url")):
+    try:
+        client = get_anon_client()
+        response = (
+            client.table("url_sources")
+            .select("*")
+            .eq("url", url)
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(status_code=404, detail="No url_sources records found for this url")
+
+        return {"data": response.data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch url sources by url: {str(exc)}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Scans CRUD
+# ---------------------------------------------------------------------------
+@app.get("/scans", tags=["Scans"], summary="List all scans")
+def list_scans():
+    try:
+        client = get_anon_client()
+        response = client.table("scans").select("*").order("scanned_at", desc=True).execute()
+        return {"data": response.data}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch scans: {str(exc)}") from exc
+
+
+class SaveScanRequest(BaseModel):
+    url: str = Field(..., description="The URL that was scanned.")
+    source: str = Field(..., description="Where the user found the link (e.g. Email, SMS).")
+    openai_raw: dict[str, Any] | None = Field(None, description="Full OpenAI/Gemini analysis result.")
+    vt_raw: dict[str, Any] | None = Field(None, description="Full VirusTotal scan result.")
+
+
+@app.post(
+    "/scans/save",
+    tags=["Scans"],
+    summary="Save a completed scan result",
+    description="Persists a full scan result (OpenAI + VirusTotal JSON) to Supabase and records the URL source.",
+    status_code=status.HTTP_201_CREATED,
+)
+def save_scan_result(payload: SaveScanRequest):
+    try:
+        client = get_anon_client()
+
+        # Record URL source
+        source_payload = {
+            "url": payload.url,
+            "source_type": payload.source,
+            "source": "TinyPhish Scan",
+        }
+        client.table("url_sources").insert(source_payload).execute()
+
+        # Insert scan with raw payloads
+        scan_payload: dict[str, Any] = {
+            "url": payload.url,
+            "expiry_date": (datetime.now(timezone.utc) + timedelta(days=DEFAULT_SCAN_EXPIRY_DAYS)).isoformat(),
+            "openai_raw": payload.openai_raw,
+            "vt_raw": payload.vt_raw,
+        }
+
+        response = client.table("scans").insert(scan_payload).execute()
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to save scan result")
+
+        return {"data": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save scan result: {str(exc)}") from exc
+
+
+@app.get(
+    "/scans/history",
+    tags=["Scans"],
+    summary="Get recent scan history",
+    description="Returns the most recent scans with openai_raw and vt_raw for the history dropdown.",
+)
+def get_scan_history(limit: int = Query(20, ge=1, le=100, description="Max scans to return")):
+    try:
+        client = get_anon_client()
+        response = (
+            client.table("scans")
+            .select("*")
+            .order("scanned_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return {"data": response.data or []}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch scan history: {str(exc)}") from exc
+
+
+@app.get("/scans/{scan_id}", tags=["Scans"], summary="Get a scan by ID")
+def get_scan_by_id(scan_id: UUID):
+    try:
+        client = get_anon_client()
+        response = (
+            client.table("scans")
+            .select("*")
+            .eq("id", str(scan_id))
+            .limit(1)
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Scan not found")
+
+        return {"data": response.data[0]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch scan: {str(exc)}") from exc
+
+
+@app.post("/scans", tags=["Scans"], summary="Create a new scan", status_code=status.HTTP_201_CREATED)
+def create_scan(payload: ScanCreate):
+    try:
+        values = payload.model_dump(mode="json", exclude_unset=True, exclude_none=True)
+
+        client = get_anon_client()
+        response = client.table("scans").insert(values).execute()
+        return {"data": response.data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to create scan: {str(exc)}") from exc
+
+
+@app.patch("/scans/{scan_id}", tags=["Scans"], summary="Update a scan")
+def update_scan(scan_id: UUID, payload: ScanUpdate):
+    try:
+        values = payload.model_dump(mode="json", exclude_none=True)
+
+        if not values:
+            raise HTTPException(status_code=400, detail="No updatable fields provided")
+
+        client = get_anon_client()
+        response = (
+            client.table("scans")
+            .update(values)
+            .eq("id", str(scan_id))
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Scan not found")
+
+        return {"data": response.data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to update scan: {str(exc)}") from exc
+
+
+@app.delete("/scans/{scan_id}", tags=["Scans"], summary="Delete a scan")
+def delete_scan(scan_id: UUID):
+    try:
+        client = get_anon_client()
+        response = (
+            client.table("scans")
+            .delete()
+            .eq("id", str(scan_id))
+            .execute()
+        )
+
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Scan not found")
+
+        return {"message": "Scan deleted", "data": response.data}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete scan: {str(exc)}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Analysis orchestration
+# ---------------------------------------------------------------------------
+@app.post(
+    "/analyze",
+    tags=["Analysis"],
+    summary="Submit a URL for analysis",
+    description=(
+        "Records the input URL in url_sources, then creates a scan row. "
+        "The scan can later be updated with OpenAI / VirusTotal payloads."
+    ),
+    status_code=status.HTTP_201_CREATED,
+)
+def analyze_url(original_url: str = Query(..., description="URL to analyze")):
+    try:
+        client = get_anon_client()
+
+        source_payload = {
+            "url": original_url,
+            "source_type": "API_ANALYZE",
+            "source": "POST /analyze",
+        }
+        client.table("url_sources").insert(source_payload).execute()
+
+        scan_payload = {
+            "url": original_url,
+            "expiry_date": (datetime.now(timezone.utc) + timedelta(days=DEFAULT_SCAN_EXPIRY_DAYS)).isoformat(),
+        }
+
+        response = client.table("scans").insert(scan_payload).execute()
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create analysis job")
+
+        return {
+            "message": "Analysis created",
+            "url": {"original_url": original_url},
+            "scan": response.data[0],
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to analyze url: {str(exc)}") from exc
+
+
+@app.get(
+    "/analyze/{scan_id}",
+    tags=["Analysis"],
+    summary="Get analysis result",
+    description="Convenience endpoint for frontend polling.",
+)
+def get_analysis_result(scan_id: UUID):
+    return get_scan_by_id(scan_id)
+
+
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+@app.get("/stats/summary", tags=["Stats"], summary="Get summary statistics")
+def get_summary_stats():
+    try:
+        client = get_anon_client()
+        scans = client.table("scans").select("*").execute().data or []
+
+        total_scans = len(scans)
+
+        return {
+            "data": {
+                "total_scans": total_scans,
+            }
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch summary stats: {str(exc)}") from exc
+
+
+@app.get("/stats/domains/{domain}", tags=["Stats"], summary="Get domain stats (deprecated)")
+def get_domain_stats(domain: str):
+    raise HTTPException(
+        status_code=410,
+        detail="Domain stats are unavailable after removal of urls/url_id schema. Use /url-sources endpoints instead.",
     )

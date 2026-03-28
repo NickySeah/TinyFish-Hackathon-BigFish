@@ -3,7 +3,10 @@ import type {
   VirusTotalResult,
   OpenAIResult,
   MergedScanResult,
+  ScanHistoryEntry,
+  FinalVerdict,
 } from "./types";
+import { deriveVerdict, overallScore } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL as string | undefined;
 
@@ -167,15 +170,104 @@ export interface FullScanCallbacks {
   onProgress?: (purpose: string) => void;
 }
 
+// ---------------------------------------------------------------------------
+// Persist scan result to Supabase
+// ---------------------------------------------------------------------------
+
+async function saveScanResult(
+  url: string,
+  source: string,
+  openai: OpenAIResult | null,
+  virusTotal: VirusTotalResult | null,
+): Promise<void> {
+  try {
+    await fetch(`${apiBase()}/scans/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url,
+        source,
+        openai_raw: openai,
+        vt_raw: virusTotal,
+      }),
+    });
+  } catch {
+    // Non-critical — don't fail the scan if persistence fails
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fetch scan history from Supabase
+// ---------------------------------------------------------------------------
+
+interface SupabaseScanRow {
+  id: string;
+  url: string;
+  openai_raw: OpenAIResult | null;
+  vt_raw: VirusTotalResult | null;
+  scanned_at: string;
+  expiry_date: string;
+}
+
+export async function fetchScanHistory(limit = 20): Promise<ScanHistoryEntry[]> {
+  const response = await fetch(`${apiBase()}/scans/history?limit=${limit}`);
+  if (!response.ok) return [];
+  const json = await response.json() as { data: SupabaseScanRow[] };
+
+  return (json.data || []).map((row) => {
+    // Reconstruct a MergedScanResult to derive verdict/score
+    const merged: MergedScanResult = {
+      url: row.url,
+      scannedAt: row.scanned_at,
+      scrapedContent: "",
+      virusTotal: row.vt_raw,
+      openai: row.openai_raw,
+    };
+    const verdict: FinalVerdict = deriveVerdict(merged);
+    const score = overallScore(merged);
+
+    return {
+      scanId: row.id,
+      url: row.url,
+      source: "Scan",
+      scannedAt: row.scanned_at,
+      finalVerdict: verdict,
+      confidenceScore: score,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fetch a single scan by ID and reconstruct MergedScanResult
+// ---------------------------------------------------------------------------
+
+export async function fetchScanById(scanId: string): Promise<MergedScanResult | null> {
+  const response = await fetch(`${apiBase()}/scans/${scanId}`);
+  if (!response.ok) return null;
+  const json = await response.json() as { data: SupabaseScanRow };
+  const row = json.data;
+  if (!row) return null;
+
+  return {
+    url: row.url,
+    scannedAt: row.scanned_at,
+    scrapedContent: "",
+    virusTotal: row.vt_raw,
+    openai: row.openai_raw,
+  };
+}
+
 /**
  * Orchestrates the full scan:
  *  1. TinyFish SSE stream (scraping page)
  *  2. VirusTotal + OpenAI in parallel (once scraping completes)
  *  3. Merge into MergedScanResult
+ *  4. Persist to Supabase
  */
 export async function runFullScan(
   url: string,
-  callbacks?: FullScanCallbacks
+  callbacks?: FullScanCallbacks,
+  source?: string,
 ): Promise<MergedScanResult> {
   // --- Step 1: TinyFish ---
   callbacks?.onStageChange?.("scraping");
@@ -208,7 +300,7 @@ export async function runFullScan(
   // --- Step 3: Merge ---
   callbacks?.onStageChange?.("complete");
 
-  return {
+  const result: MergedScanResult = {
     url,
     scannedAt: new Date().toISOString(),
     scrapedContent,
@@ -216,4 +308,9 @@ export async function runFullScan(
     virusTotal,
     openai,
   };
+
+  // --- Step 4: Persist to Supabase (fire-and-forget) ---
+  saveScanResult(url, source ?? "Unknown", openai, virusTotal);
+
+  return result;
 }

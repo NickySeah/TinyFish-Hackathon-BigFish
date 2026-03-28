@@ -5,7 +5,7 @@ from config import settings
 
 
 def get_anon_client() -> Client:
-    return create_client(settings.supabase_url, settings.supabase_key)
+    return create_client(settings.supabase_url, settings.supabase_anon_key)
 
 
 def get_authenticated_client(access_token: str) -> Client:

@@ -14,8 +14,6 @@ import {
 } from "@/components/ui/select";
 import { runFullScan } from "@/lib/api";
 import type { ScanStage } from "@/lib/api";
-import { addScanToHistory } from "@/lib/scanHistory";
-import { deriveVerdict, overallScore } from "@/lib/types";
 
 const SOURCES = [
   "Email",
@@ -104,19 +102,7 @@ export default function HomePage() {
         onProgress: (purpose) => {
           setProgressText(purpose);
         },
-      });
-
-      // Save to history
-      const verdict = deriveVerdict(result);
-      const score = overallScore(result);
-      addScanToHistory({
-        scanId: `scan-${Date.now()}`,
-        url: result.url,
-        source,
-        scannedAt: result.scannedAt,
-        finalVerdict: verdict,
-        confidenceScore: score,
-      });
+      }, source);
 
       setScanComplete(true);
       // Brief delay to show "complete" state before navigating

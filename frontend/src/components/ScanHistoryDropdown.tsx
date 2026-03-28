@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { History, Trash2, ExternalLink, AlertTriangle, ShieldCheck, ShieldAlert, Clock } from "lucide-react";
-import { getScanHistory, clearScanHistory } from "@/lib/scanHistory";
+import { History, Trash2, ExternalLink, AlertTriangle, ShieldCheck, ShieldAlert, Clock, Loader2 } from "lucide-react";
+import { fetchScanHistory, fetchScanById } from "@/lib/api";
 import type { ScanHistoryEntry } from "@/lib/types";
 
 function timeAgo(dateStr: string): string {
@@ -38,13 +38,26 @@ export default function ScanHistoryDropdown() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [history, setHistory] = useState<ScanHistoryEntry[]>([]);
-  const [loadingId] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const toggleOpen = () => {
+  const toggleOpen = async () => {
     const next = !open;
-    if (next) setHistory(getScanHistory());
-    setOpen(next);
+    if (next) {
+      setOpen(true);
+      setIsLoadingHistory(true);
+      try {
+        const entries = await fetchScanHistory(20);
+        setHistory(entries);
+      } catch {
+        setHistory([]);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    } else {
+      setOpen(false);
+    }
   };
 
   // Click outside
@@ -59,14 +72,26 @@ export default function ScanHistoryDropdown() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  const handleEntryClick = (entry: ScanHistoryEntry) => {
-    setOpen(false);
-    // Navigate to home with the URL pre-filled so user can re-scan
-    navigate("/", { state: { prefillUrl: entry.url, prefillSource: entry.source } });
+  const handleEntryClick = async (entry: ScanHistoryEntry) => {
+    setLoadingId(entry.scanId);
+    try {
+      const result = await fetchScanById(entry.scanId);
+      setOpen(false);
+      if (result) {
+        navigate("/results", { state: result });
+      } else {
+        // Fallback: pre-fill URL for re-scan
+        navigate("/", { state: { prefillUrl: entry.url, prefillSource: entry.source } });
+      }
+    } catch {
+      setOpen(false);
+      navigate("/", { state: { prefillUrl: entry.url, prefillSource: entry.source } });
+    } finally {
+      setLoadingId(null);
+    }
   };
 
   const handleClear = () => {
-    clearScanHistory();
     setHistory([]);
   };
 
@@ -79,9 +104,6 @@ export default function ScanHistoryDropdown() {
         aria-label="Recent scans"
       >
         <History className="w-[18px] h-[18px]" />
-        {getScanHistory().length > 0 && (
-          <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-primary" />
-        )}
       </button>
 
       {/* Dropdown */}
@@ -114,8 +136,17 @@ export default function ScanHistoryDropdown() {
             <div className="max-h-[320px] overflow-y-auto">
               {history.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-10 text-muted-foreground/50">
-                  <History className="w-6 h-6 mb-2" />
-                  <span className="text-xs font-mono">No recent scans</span>
+                  {isLoadingHistory ? (
+                    <>
+                      <Loader2 className="w-6 h-6 mb-2 animate-spin" />
+                      <span className="text-xs font-mono">Loading history...</span>
+                    </>
+                  ) : (
+                    <>
+                      <History className="w-6 h-6 mb-2" />
+                      <span className="text-xs font-mono">No recent scans</span>
+                    </>
+                  )}
                 </div>
               ) : (
                 history.map((entry, i) => (
@@ -130,7 +161,11 @@ export default function ScanHistoryDropdown() {
                   >
                     {/* Verdict icon */}
                     <div className={`shrink-0 ${verdictColor(entry.finalVerdict)}`}>
-                      <VerdictIcon verdict={entry.finalVerdict} />
+                      {loadingId === entry.scanId ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <VerdictIcon verdict={entry.finalVerdict} />
+                      )}
                     </div>
 
                     {/* Info */}
