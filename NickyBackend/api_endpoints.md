@@ -13,25 +13,35 @@ Checks database connectivity.
 ## URL Endpoints
 
 ### GET /urls
-Retrieve all stored URLs.
+Removed after schema migration.
 
 ### GET /urls/{url_id}
-Retrieve a specific URL by its ID.
+Removed after schema migration.
 
 ### GET /urls/by-original?original_url=...
-Retrieve a URL using its original URL string.
+Removed after schema migration.
 
 ### POST /urls
-Create a new URL record.
+Removed after schema migration.
 
 ### PATCH /urls/{url_id}
-Update an existing URL.
+Removed after schema migration.
 
 ### DELETE /urls/{url_id}
-Delete a URL.
+Removed after schema migration.
 
 ### GET /urls/{url_id}/scans
-Retrieve all scans associated with a specific URL.
+Removed after schema migration.
+
+---
+
+## URL Sources Endpoints
+
+### GET /url-sources
+Retrieve all rows from the `url_sources` table.
+
+### GET /url-sources/by-url?url=...
+Retrieve rows from `url_sources` where `url` exactly matches the provided URL.
 
 ---
 
@@ -45,9 +55,11 @@ Retrieve a specific scan by ID.
 
 ### POST /scans
 Create a new scan manually.
+- Required fields: `url`, `expiry_date`
+- Optional fields: `openai_raw`, `vt_raw`
 
 ### PATCH /scans/{scan_id}
-Update scan results (e.g. verdict, risk score).
+Update scan results (e.g. openai_raw, vt_raw, expiry_date).
 
 ### DELETE /scans/{scan_id}
 Delete a scan.
@@ -58,8 +70,10 @@ Delete a scan.
 
 ### POST /analyze
 Submit a URL for analysis.
-- Creates URL if not exists
-- Creates a scan with PENDING status
+- Stores the URL in `url_sources`
+- Creates a scan row with required fields
+- Automatically sets `scan.url` to the submitted URL
+- Automatically sets `scan.expiry_date` to current UTC time + 7 days
 
 ### GET /analyze/{scan_id}
 Retrieve analysis result (used for polling).
@@ -71,19 +85,14 @@ Retrieve analysis result (used for polling).
 ### GET /stats/summary
 Returns overall statistics:
 - Total scans
-- Verdict breakdown (safe, malicious, etc.)
-- Average risk score
 
 ### GET /stats/domains/{domain}
-Returns statistics for a specific domain:
-- Total scans
-- Verdict breakdown
+Returns `410 Gone` because domain-based scan stats depended on the dropped `urls` table.
 
 ---
 
 ## Notes
 
-- URLs are stored uniquely.
-- Each URL can have multiple scans.
+- URLs are stored in `url_sources` (not guaranteed unique).
+- Scans are now independent rows (no `url_id` foreign key).
 - External services (Tinyfish, VirusTotal) update scan results asynchronously.
-- Risk score must be between 0–100.
