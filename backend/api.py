@@ -308,10 +308,8 @@ async def openai(request: OpenAIRequest) -> OpenAIResponse:
 
     payload: dict[str, Any] = {
         "model": OPENAI_MODEL,
-        "input": [
-            {"role": "system", "content": PHISHING_ANALYSIS_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        "instructions": PHISHING_ANALYSIS_SYSTEM_PROMPT,
+        "input": user_message,
     }
 
     try:

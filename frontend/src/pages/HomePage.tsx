@@ -12,30 +12,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { analyzeUrl } from "@/lib/api";
+import { runFullScan } from "@/lib/api";
+import type { ScanStage } from "@/lib/api";
 import { addScanToHistory } from "@/lib/scanHistory";
+import { deriveVerdict, overallScore } from "@/lib/types";
 
 const SOURCES = [
   "Email",
-  "SMS / Text Message",
+  "SMS / Messaging App",
   "Social Media",
-  "Messaging App",
   "Search Engine",
   "Website / Ad",
   "Other",
 ];
 
-const SCAN_STAGES = [
-  { key: "connecting", label: "Connecting to target..." },
-  { key: "scraping", label: "Scraping page content..." },
-  { key: "analyzing", label: "Analyzing with AI..." },
-  { key: "generating", label: "Generating report..." },
-];
-
-function stageIndex(stage: string): number {
-  const idx = SCAN_STAGES.findIndex((s) => s.key === stage);
-  return idx >= 0 ? idx : 0;
-}
+const STAGE_LABELS: Record<ScanStage, string> = {
+  scraping: "Scraping page content...",
+  analyzing: "Checking reputation & analyzing content...",
+  complete: "Complete!",
+};
 
 function isValidUrl(str: string): boolean {
   try {
@@ -53,7 +48,8 @@ export default function HomePage() {
   const [sourceDetail, setSourceDetail] = useState("");
   const [errors, setErrors] = useState<{ url?: string; source?: string }>({});
   const [isScanning, setIsScanning] = useState(false);
-  const [scanStage, setScanStage] = useState(0);
+  const [scanStage, setScanStage] = useState<ScanStage>("scraping");
+  const [progressText, setProgressText] = useState("");
   const [streamingUrl, setStreamingUrl] = useState<string | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const [scanComplete, setScanComplete] = useState(false);
@@ -78,7 +74,8 @@ export default function HomePage() {
     if (!validate()) return;
 
     setIsScanning(true);
-    setScanStage(0);
+    setScanStage("scraping");
+    setProgressText("");
     setStreamingUrl(null);
     setIframeLoaded(false);
     setScanComplete(false);
@@ -93,42 +90,39 @@ export default function HomePage() {
       : `https://${url.trim()}`;
 
     try {
-      const result = await analyzeUrl(
-        {
-          url: normalizedUrl,
-          source,
-          sourceDetail: source === "Other" ? sourceDetail : undefined,
+      const result = await runFullScan(normalizedUrl, {
+        onStageChange: (stage) => {
+          setScanStage(stage);
+          if (stage === "analyzing") {
+            setProgressText("Checking reputation & analyzing content...");
+          }
         },
-        {
-          onStreamUrl: (sUrl) => {
-            if (streamFallbackTimer.current) clearTimeout(streamFallbackTimer.current);
-            setStreamingUrl(sUrl);
-          },
-          onStatus: (stage) => {
-            setScanStage(stageIndex(stage));
-          },
-          onResult: (res) => {
-            // Save to history
-            addScanToHistory({
-              scanId: res.scanId || `scan-${Date.now()}`,
-              url: res.url,
-              source,
-              scannedAt: res.analyzedAt,
-              finalVerdict: res.finalVerdict,
-              confidenceScore: res.confidenceScore,
-            });
+        onStreamingUrl: (sUrl) => {
+          if (streamFallbackTimer.current) clearTimeout(streamFallbackTimer.current);
+          setStreamingUrl(sUrl);
+        },
+        onProgress: (purpose) => {
+          setProgressText(purpose);
+        },
+      });
 
-            setScanComplete(true);
-            // Brief delay to show "complete" state before navigating
-            setTimeout(() => {
-              navigate("/results", { state: res });
-            }, 800);
-          },
-        }
-      );
+      // Save to history
+      const verdict = deriveVerdict(result);
+      const score = overallScore(result);
+      addScanToHistory({
+        scanId: `scan-${Date.now()}`,
+        url: result.url,
+        source,
+        scannedAt: result.scannedAt,
+        finalVerdict: verdict,
+        confidenceScore: score,
+      });
 
-      // If onResult callback didn't fire (shouldn't happen, but safety)
-      if (!result) return;
+      setScanComplete(true);
+      // Brief delay to show "complete" state before navigating
+      setTimeout(() => {
+        navigate("/results", { state: result });
+      }, 800);
     } catch (err) {
       if (streamFallbackTimer.current) clearTimeout(streamFallbackTimer.current);
       setIsScanning(false);
@@ -392,40 +386,61 @@ export default function HomePage() {
               </motion.div>
             )}
 
-            {/* Progress stages */}
+            {/* Progress info */}
             <div className="font-mono text-sm space-y-3 text-left max-w-xs">
-              {SCAN_STAGES.map((stage, i) => (
-                <motion.div
-                  key={stage.key}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={
-                    i <= scanStage
-                      ? { opacity: 1, x: 0 }
-                      : { opacity: 0, x: -10 }
-                  }
-                  transition={{ duration: 0.3, delay: i <= scanStage ? 0.1 : 0 }}
-                  className="flex items-center gap-3"
-                >
-                  {i < scanStage ? (
-                    <span className="text-safe text-xs">&#10003;</span>
-                  ) : i === scanStage ? (
-                    <Loader2 className="w-3 h-3 text-primary animate-spin" />
-                  ) : (
-                    <span className="w-3 h-3" />
-                  )}
-                  <span
-                    className={
-                      i < scanStage
-                        ? "text-muted-foreground/60"
-                        : i === scanStage
-                          ? "text-foreground"
-                          : "text-muted-foreground/30"
+              {(["scraping", "analyzing", "complete"] as ScanStage[]).map((stage) => {
+                const isDone =
+                  stage === "scraping" && scanStage !== "scraping" ||
+                  stage === "analyzing" && scanStage === "complete";
+                const isCurrent =
+                  stage === scanStage && stage !== "complete";
+                const isPending = !isDone && !isCurrent;
+
+                return (
+                  <motion.div
+                    key={stage}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={
+                      !isPending
+                        ? { opacity: 1, x: 0 }
+                        : { opacity: 0, x: -10 }
                     }
+                    transition={{ duration: 0.3 }}
+                    className="flex items-center gap-3"
                   >
-                    {stage.label}
-                  </span>
-                </motion.div>
-              ))}
+                    {isDone ? (
+                      <span className="text-safe text-xs">&#10003;</span>
+                    ) : isCurrent ? (
+                      <Loader2 className="w-3 h-3 text-primary animate-spin" />
+                    ) : (
+                      <span className="w-3 h-3" />
+                    )}
+                    <span
+                      className={
+                        isDone
+                          ? "text-muted-foreground/60"
+                          : isCurrent
+                            ? "text-foreground"
+                            : "text-muted-foreground/30"
+                      }
+                    >
+                      {STAGE_LABELS[stage]}
+                    </span>
+                  </motion.div>
+                );
+              })}
+
+              {/* TinyFish live purpose text */}
+              {scanStage === "scraping" && progressText && (
+                <motion.p
+                  key={progressText}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-xs text-primary/70 ml-6 truncate max-w-[250px]"
+                >
+                  {progressText}
+                </motion.p>
+              )}
             </div>
 
             <motion.p

@@ -1,21 +1,41 @@
 import { useLocation, useNavigate, Navigate } from "react-router-dom";
 import { motion } from "motion/react";
-import { ArrowLeft, Sparkles, ExternalLink } from "lucide-react";
+import { ArrowLeft, Sparkles, ExternalLink, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import ConfidenceGauge from "@/components/ConfidenceGauge";
 import RiskCard from "@/components/RiskCard";
 import MetadataTable from "@/components/MetadataTable";
-import type { AnalysisResult } from "@/lib/types";
+import type { MergedScanResult } from "@/lib/types";
+import { deriveVerdict, overallScore } from "@/lib/types";
+
+function VerdictBadge({ result }: { result: MergedScanResult }) {
+  const verdict = deriveVerdict(result);
+  const config = {
+    SAFE: { icon: ShieldCheck, color: "text-safe", bg: "bg-safe/10", label: "Safe" },
+    SUSPICIOUS: { icon: ShieldAlert, color: "text-warning", bg: "bg-warning/10", label: "Suspicious" },
+    MALICIOUS: { icon: ShieldX, color: "text-danger", bg: "bg-danger/10", label: "Malicious" },
+  }[verdict];
+  const Icon = config.icon;
+  return (
+    <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full ${config.bg} ${config.color}`}>
+      <Icon className="w-3.5 h-3.5" />
+      <span className="font-mono text-xs font-bold uppercase tracking-wider">{config.label}</span>
+    </div>
+  );
+}
 
 export default function ResultsPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const result = location.state as AnalysisResult | null;
+  const result = location.state as MergedScanResult | null;
 
   if (!result) {
     return <Navigate to="/" replace />;
   }
+
+  const score = overallScore(result);
+  const analysis = result.openai.analysis;
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-10 md:py-16">
@@ -35,9 +55,12 @@ export default function ResultsPage() {
           <ArrowLeft className="w-4 h-4 mr-1.5" />
           Back
         </Button>
-        <h1 className="font-heading text-2xl md:text-3xl font-bold text-foreground mb-2">
-          Analysis Results
-        </h1>
+        <div className="flex items-center gap-4 mb-2">
+          <h1 className="font-heading text-2xl md:text-3xl font-bold text-foreground">
+            Analysis Results
+          </h1>
+          <VerdictBadge result={result} />
+        </div>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <ExternalLink className="w-3.5 h-3.5" />
           <span className="font-mono text-xs truncate max-w-md">
@@ -48,7 +71,7 @@ export default function ResultsPage() {
 
       {/* Score + AI Summary */}
       <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-8 md:gap-12 mb-10">
-        <ConfidenceGauge score={result.confidenceScore} />
+        <ConfidenceGauge score={score} />
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -75,32 +98,34 @@ export default function ResultsPage() {
               Analysis Overview
             </h3>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              {result.aiSummary}
+              {analysis.explanation}
             </p>
           </div>
         </motion.div>
       </div>
 
-      {/* Risk Breakdown */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.3 }}
-      >
-        <h2 className="font-heading text-lg font-bold text-foreground mb-5">
-          Risk Breakdown
-        </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {result.riskCategories.map((cat, i) => (
-            <RiskCard key={cat.name} category={cat} index={i} />
-          ))}
-        </div>
-      </motion.div>
+      {/* Phishing Indicators */}
+      {analysis.indicators.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.3 }}
+        >
+          <h2 className="font-heading text-lg font-bold text-foreground mb-5">
+            Phishing Indicators
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {analysis.indicators.map((ind, i) => (
+              <RiskCard key={`${ind.category}-${i}`} indicator={ind} index={i} />
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       <Separator className="bg-border/40 my-10" />
 
-      {/* Site Metadata — collapsible */}
-      <MetadataTable metadata={result.metadata} />
+      {/* VirusTotal Detection Stats — collapsible */}
+      <MetadataTable virusTotal={result.virusTotal} />
 
       <Separator className="bg-border/40 my-10" />
 
@@ -119,7 +144,7 @@ export default function ResultsPage() {
         </Button>
         <p className="text-muted-foreground/50 text-xs mt-3 font-mono">
           analyzed at{" "}
-          {new Date(result.analyzedAt).toLocaleString()}
+          {new Date(result.scannedAt).toLocaleString()}
         </p>
       </motion.div>
     </div>

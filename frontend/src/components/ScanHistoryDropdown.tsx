@@ -2,9 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { History, Trash2, ExternalLink, AlertTriangle, ShieldCheck, ShieldAlert, Clock } from "lucide-react";
-import { toast } from "sonner";
 import { getScanHistory, clearScanHistory } from "@/lib/scanHistory";
-import { fetchScanById } from "@/lib/api";
 import type { ScanHistoryEntry } from "@/lib/types";
 
 function timeAgo(dateStr: string): string {
@@ -40,15 +38,14 @@ export default function ScanHistoryDropdown() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [history, setHistory] = useState<ScanHistoryEntry[]>([]);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [loadingId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Refresh history when dropdown opens
-  useEffect(() => {
-    if (open) {
-      setHistory(getScanHistory());
-    }
-  }, [open]);
+  const toggleOpen = () => {
+    const next = !open;
+    if (next) setHistory(getScanHistory());
+    setOpen(next);
+  };
 
   // Click outside
   useEffect(() => {
@@ -62,17 +59,10 @@ export default function ScanHistoryDropdown() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [open]);
 
-  const handleEntryClick = async (entry: ScanHistoryEntry) => {
-    setLoadingId(entry.scanId);
-    try {
-      const result = await fetchScanById(entry.scanId);
-      setOpen(false);
-      navigate("/results", { state: result });
-    } catch {
-      toast.error("Failed to load scan results");
-    } finally {
-      setLoadingId(null);
-    }
+  const handleEntryClick = (entry: ScanHistoryEntry) => {
+    setOpen(false);
+    // Navigate to home with the URL pre-filled so user can re-scan
+    navigate("/", { state: { prefillUrl: entry.url, prefillSource: entry.source } });
   };
 
   const handleClear = () => {
@@ -84,7 +74,7 @@ export default function ScanHistoryDropdown() {
     <div ref={containerRef} className="relative">
       {/* Trigger */}
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggleOpen}
         className="relative flex items-center justify-center w-9 h-9 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors cursor-pointer"
         aria-label="Recent scans"
       >
