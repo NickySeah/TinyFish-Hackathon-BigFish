@@ -92,8 +92,8 @@ export interface MergedScanResult {
   scannedAt: string;
   scrapedContent: string;
   streamingUrl?: string;
-  virusTotal: VirusTotalResult;
-  openai: OpenAIResult;
+  virusTotal: VirusTotalResult | null;
+  openai: OpenAIResult | null;
 }
 
 // --- Helpers ---
@@ -120,10 +120,31 @@ export interface VTOverview {
   categories: Record<string, string> | null;
   threatNames: string[];
   timesSubmitted: number | null;
+  creationDate: number | null;
+  lastAnalysisDate: number | null;
+  redirection: string | null;
+  registrar: string | null;
+  certificate: { issuer: string; validFrom: string; validTo: string } | null;
 }
 
 export function extractVTOverview(vt: VirusTotalResult): VTOverview {
   const a = vtAttrs(vt);
+
+  // SSL certificate info
+  let certificate: VTOverview["certificate"] = null;
+  const cert = a?.last_https_certificate as Record<string, unknown> | undefined;
+  if (cert) {
+    const issuer = cert.issuer as Record<string, string> | undefined;
+    const validity = cert.validity as Record<string, string> | undefined;
+    if (issuer && validity) {
+      certificate = {
+        issuer: issuer.O || issuer.CN || "Unknown",
+        validFrom: validity.not_before ?? "",
+        validTo: validity.not_after ?? "",
+      };
+    }
+  }
+
   return {
     stats: extractVTStats(vt),
     reputation: (a?.reputation as number) ?? null,
@@ -134,12 +155,17 @@ export function extractVTOverview(vt: VirusTotalResult): VTOverview {
     categories: (a?.categories as Record<string, string>) ?? null,
     threatNames: (a?.threat_names as string[]) ?? [],
     timesSubmitted: (a?.times_submitted as number) ?? null,
+    creationDate: (a?.creation_date as number) ?? null,
+    lastAnalysisDate: (a?.last_analysis_date as number) ?? null,
+    redirection: (a?.redirection_chain as string[])?.at(-1) ?? null,
+    registrar: (a?.registrar as string) ?? null,
+    certificate,
   };
 }
 
 export function deriveVerdict(result: MergedScanResult): FinalVerdict {
-  const score = result.openai.analysis.confidence_score;
-  const vtStats = extractVTStats(result.virusTotal);
+  const score = result.openai?.analysis.confidence_score ?? 0;
+  const vtStats = result.virusTotal ? extractVTStats(result.virusTotal) : null;
   const vtMalicious = vtStats?.malicious ?? 0;
 
   if (score >= 0.6 || vtMalicious >= 3) return "MALICIOUS";
@@ -148,7 +174,7 @@ export function deriveVerdict(result: MergedScanResult): FinalVerdict {
 }
 
 export function overallScore(result: MergedScanResult): number {
-  return Math.round(result.openai.analysis.confidence_score * 100);
+  return Math.round((result.openai?.analysis.confidence_score ?? 0) * 100);
 }
 
 // --- Scan History ---

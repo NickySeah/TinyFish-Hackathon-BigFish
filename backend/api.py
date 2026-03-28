@@ -72,8 +72,11 @@ app.add_middleware(
 # Environment variables
 # ---------------------------------------------------------------------------
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+# OpenAI (commented out — replaced with Gemini)
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 TINYFISH_API_KEY = os.getenv("TINYFISH_API_KEY")
 TINYFISH_BROWSER_PROFILE = os.getenv("TINYFISH_BROWSER_PROFILE", "stealth")
 TINYFISH_BASE_URL = "https://agent.tinyfish.ai"
@@ -270,35 +273,153 @@ async def health() -> HealthResponse:
 async def virustotal(request: VirusTotalRequest) -> VirusTotalResponse:
     if not VIRUSTOTAL_API_KEY:
         return VirusTotalResponse(url=request.url, data={"error": "VIRUSTOTAL_API_KEY not set"})
-    async with vt.Client(VIRUSTOTAL_API_KEY) as client:
-        await client.scan_url_async(request.url)
-        url_id = vt.url_id(request.url)
-        url_report = await client.get_object_async(f"/urls/{url_id}")
-        return VirusTotalResponse(url=request.url, data=url_report.to_dict())
+    try:
+        async with vt.Client(VIRUSTOTAL_API_KEY) as client:
+            url_id = vt.url_id(request.url)
+            # Try fetching an existing report first
+            try:
+                url_report = await client.get_object_async(f"/urls/{url_id}")
+            except vt.error.APIError:
+                # No existing report — submit for scanning and retry
+                await client.scan_url_async(request.url)
+                url_report = await client.get_object_async(f"/urls/{url_id}")
+            return VirusTotalResponse(url=request.url, data=url_report.to_dict())
+    except Exception as exc:
+        return VirusTotalResponse(url=request.url, data={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Original OpenAI implementation (commented out — replaced with Gemini)
+# ---------------------------------------------------------------------------
+# @app.post(
+#     "/openai",
+#     tags=["OpenAI"],
+#     summary="Analyse a website for phishing",
+#     description=(
+#         "Accept scraped website content and a URL. Use OpenAI to analyse the content "
+#         "against common phishing indicators and return a confidence score, explanation, "
+#         "and list of specific indicators detected."
+#     ),
+#     response_model=OpenAIResponse,
+# )
+# async def openai(request: OpenAIRequest) -> OpenAIResponse:
+#     if not OPENAI_API_KEY:
+#         return OpenAIResponse(
+#             url=request.url,
+#             analysis=PhishingAnalysis(
+#                 confidence_score=0.0,
+#                 is_phishing=False,
+#                 explanation="OPENAI_API_KEY not configured.",
+#                 indicators=[],
+#             ),
+#             data={"error": "OPENAI_API_KEY not set"},
+#         )
+#
+#     user_message = (
+#         f"URL: {request.url}\n\n"
+#         f"Scraped website content:\n---\n{request.scraped_content}\n---"
+#     )
+#
+#     payload: dict[str, Any] = {
+#         "model": OPENAI_MODEL,
+#         "instructions": PHISHING_ANALYSIS_SYSTEM_PROMPT,
+#         "input": user_message,
+#     }
+#
+#     try:
+#         async with httpx.AsyncClient(timeout=60) as client:
+#             resp = await client.post(
+#                 "https://api.openai.com/v1/responses",
+#                 json=payload,
+#                 headers={
+#                     "Authorization": f"Bearer {OPENAI_API_KEY}",
+#                     "Content-Type": "application/json",
+#                 },
+#             )
+#             resp.raise_for_status()
+#             result = resp.json()
+#     except httpx.HTTPStatusError as exc:
+#         return OpenAIResponse(
+#             url=request.url,
+#             analysis=PhishingAnalysis(
+#                 confidence_score=0.0,
+#                 is_phishing=False,
+#                 explanation=f"OpenAI API returned status {exc.response.status_code}.",
+#                 indicators=[],
+#             ),
+#             data={"error": str(exc), "status_code": exc.response.status_code},
+#         )
+#     except httpx.RequestError as exc:
+#         return OpenAIResponse(
+#             url=request.url,
+#             analysis=PhishingAnalysis(
+#                 confidence_score=0.0,
+#                 is_phishing=False,
+#                 explanation="Failed to reach OpenAI API.",
+#                 indicators=[],
+#             ),
+#             data={"error": str(exc)},
+#         )
+#
+#     output_items = result.get("output", [])
+#     raw_text = ""
+#     for item in output_items:
+#         if item.get("type") == "message":
+#             for content_block in item.get("content", []):
+#                 if content_block.get("type") == "output_text":
+#                     raw_text += content_block.get("text", "")
+#
+#     if not raw_text:
+#         raw_text = result.get("output_text", "")
+#
+#     try:
+#         analysis_json = json.loads(raw_text)
+#         analysis = PhishingAnalysis(**analysis_json)
+#     except (json.JSONDecodeError, Exception) as exc:
+#         return OpenAIResponse(
+#             url=request.url,
+#             analysis=PhishingAnalysis(
+#                 confidence_score=0.0,
+#                 is_phishing=False,
+#                 explanation=f"Failed to parse OpenAI response: {exc}",
+#                 indicators=[],
+#             ),
+#             data={"raw_response": raw_text, "parse_error": str(exc)},
+#         )
+#
+#     return OpenAIResponse(
+#         url=request.url,
+#         analysis=analysis,
+#         data={
+#             "model": result.get("model", OPENAI_MODEL),
+#             "id": result.get("id", ""),
+#             "usage": result.get("usage", {}),
+#         },
+#     )
 
 
 @app.post(
     "/openai",
     tags=["OpenAI"],
-    summary="Analyse a website for phishing",
+    summary="Analyse a website for phishing (powered by Gemini)",
     description=(
-        "Accept scraped website content and a URL. Use OpenAI to analyse the content "
-        "against common phishing indicators and return a confidence score, explanation, "
-        "and list of specific indicators detected."
+        "Accept scraped website content and a URL. Use Google Gemini to analyse "
+        "the content against common phishing indicators and return a confidence "
+        "score, explanation, and list of specific indicators detected."
     ),
     response_model=OpenAIResponse,
 )
-async def openai(request: OpenAIRequest) -> OpenAIResponse:
-    if not OPENAI_API_KEY:
+async def analyse_phishing(request: OpenAIRequest) -> OpenAIResponse:
+    if not GEMINI_API_KEY:
         return OpenAIResponse(
             url=request.url,
             analysis=PhishingAnalysis(
                 confidence_score=0.0,
                 is_phishing=False,
-                explanation="OPENAI_API_KEY not configured.",
+                explanation="GEMINI_API_KEY not configured.",
                 indicators=[],
             ),
-            data={"error": "OPENAI_API_KEY not set"},
+            data={"error": "GEMINI_API_KEY not set"},
         )
 
     user_message = (
@@ -307,20 +428,22 @@ async def openai(request: OpenAIRequest) -> OpenAIResponse:
     )
 
     payload: dict[str, Any] = {
-        "model": OPENAI_MODEL,
-        "instructions": PHISHING_ANALYSIS_SYSTEM_PROMPT,
-        "input": user_message,
+        "system_instruction": {"parts": [{"text": PHISHING_ANALYSIS_SYSTEM_PROMPT}]},
+        "contents": [{"parts": [{"text": user_message}]}],
+        "generationConfig": {"responseMimeType": "application/json"},
     }
+
+    gemini_url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                "https://api.openai.com/v1/responses",
+                gemini_url,
                 json=payload,
-                headers={
-                    "Authorization": f"Bearer {OPENAI_API_KEY}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Content-Type": "application/json"},
             )
             resp.raise_for_status()
             result = resp.json()
@@ -330,7 +453,7 @@ async def openai(request: OpenAIRequest) -> OpenAIResponse:
             analysis=PhishingAnalysis(
                 confidence_score=0.0,
                 is_phishing=False,
-                explanation=f"OpenAI API returned status {exc.response.status_code}.",
+                explanation=f"Gemini API returned status {exc.response.status_code}.",
                 indicators=[],
             ),
             data={"error": str(exc), "status_code": exc.response.status_code},
@@ -341,22 +464,34 @@ async def openai(request: OpenAIRequest) -> OpenAIResponse:
             analysis=PhishingAnalysis(
                 confidence_score=0.0,
                 is_phishing=False,
-                explanation="Failed to reach OpenAI API.",
+                explanation="Failed to reach Gemini API.",
                 indicators=[],
             ),
             data={"error": str(exc)},
         )
 
-    output_items = result.get("output", [])
+    # Extract text from Gemini response: candidates[0].content.parts[0].text
     raw_text = ""
-    for item in output_items:
-        if item.get("type") == "message":
-            for content_block in item.get("content", []):
-                if content_block.get("type") == "output_text":
-                    raw_text += content_block.get("text", "")
+    try:
+        candidates = result.get("candidates", [])
+        if candidates:
+            parts = candidates[0].get("content", {}).get("parts", [])
+            for part in parts:
+                raw_text += part.get("text", "")
+    except (IndexError, AttributeError):
+        pass
 
     if not raw_text:
-        raw_text = result.get("output_text", "")
+        return OpenAIResponse(
+            url=request.url,
+            analysis=PhishingAnalysis(
+                confidence_score=0.0,
+                is_phishing=False,
+                explanation="Gemini returned an empty response.",
+                indicators=[],
+            ),
+            data={"raw_response": result},
+        )
 
     try:
         analysis_json = json.loads(raw_text)
@@ -367,7 +502,7 @@ async def openai(request: OpenAIRequest) -> OpenAIResponse:
             analysis=PhishingAnalysis(
                 confidence_score=0.0,
                 is_phishing=False,
-                explanation=f"Failed to parse OpenAI response: {exc}",
+                explanation=f"Failed to parse Gemini response: {exc}",
                 indicators=[],
             ),
             data={"raw_response": raw_text, "parse_error": str(exc)},
@@ -377,9 +512,8 @@ async def openai(request: OpenAIRequest) -> OpenAIResponse:
         url=request.url,
         analysis=analysis,
         data={
-            "model": result.get("model", OPENAI_MODEL),
-            "id": result.get("id", ""),
-            "usage": result.get("usage", {}),
+            "model": GEMINI_MODEL,
+            "usage": result.get("usageMetadata", {}),
         },
     )
 
@@ -405,7 +539,7 @@ async def tinyfish(request: TinyFishRequest) -> StreamingResponse:
         target_url = f"https://{target_url}"
 
     goal = (
-        "Visit this URL in the browser. Do the following:\n"
+        "Do the following:\n"
         "1. Extract and return ALL visible text content on the page.\n"
         "2. Note the final URL after any redirects.\n"
         "3. Report if any files were downloaded or if any download dialogs appeared.\n"
@@ -443,6 +577,13 @@ async def tinyfish(request: TinyFishRequest) -> StreamingResponse:
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             yield f"{line}\n\n"
+                            # Close stream once COMPLETE arrives
+                            try:
+                                evt = json.loads(line[6:])
+                                if evt.get("type") == "COMPLETE":
+                                    return
+                            except (json.JSONDecodeError, AttributeError):
+                                pass
 
         except httpx.TimeoutException:
             payload = json.dumps(

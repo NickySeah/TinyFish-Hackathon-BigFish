@@ -50,6 +50,7 @@ export async function scanWithTinyFish(
   let buffer = "";
   let scrapedContent = "";
   let streamingUrl: string | undefined;
+  let completed = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -89,6 +90,7 @@ export async function scanWithTinyFish(
                   (res?.content as string) ??
                   (res?.result as string) ??
                   JSON.stringify(res);
+            completed = true;
             break;
           }
           case "ERROR":
@@ -98,6 +100,12 @@ export async function scanWithTinyFish(
         // Re-throw errors we created intentionally
         if (err instanceof Error && err.message) throw err;
       }
+    }
+
+    // Stop reading as soon as we have the result — don't wait for heartbeats
+    if (completed) {
+      reader.cancel();
+      break;
     }
   }
 
@@ -177,13 +185,25 @@ export async function runFullScan(
     onProgress: callbacks?.onProgress,
   });
 
-  // --- Step 2: VT + OpenAI in parallel ---
+  // --- Step 2: VT + Gemini in parallel (either can fail) ---
   callbacks?.onStageChange?.("analyzing");
 
-  const [virusTotal, openai] = await Promise.all([
+  const [vtSettled, aiSettled] = await Promise.allSettled([
     scanWithVirusTotal(url),
     analyzeWithOpenAI(url, scrapedContent),
   ]);
+
+  const virusTotal = vtSettled.status === "fulfilled" ? vtSettled.value : null;
+  const openai = aiSettled.status === "fulfilled" ? aiSettled.value : null;
+
+  // If both failed, throw so the caller can show an error
+  if (!virusTotal && !openai) {
+    const vtErr = vtSettled.status === "rejected" ? vtSettled.reason : null;
+    const aiErr = aiSettled.status === "rejected" ? aiSettled.reason : null;
+    throw new Error(
+      `Both analyses failed. VT: ${vtErr?.message ?? "unknown"}. AI: ${aiErr?.message ?? "unknown"}`
+    );
+  }
 
   // --- Step 3: Merge ---
   callbacks?.onStageChange?.("complete");

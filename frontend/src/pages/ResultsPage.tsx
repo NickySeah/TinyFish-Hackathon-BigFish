@@ -35,7 +35,7 @@ export default function ResultsPage() {
   }
 
   const score = overallScore(result);
-  const analysis = result.openai.analysis;
+  const analysis = result.openai?.analysis ?? null;
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-10 md:py-16">
@@ -98,14 +98,14 @@ export default function ResultsPage() {
               Analysis Overview
             </h3>
             <p className="text-muted-foreground text-sm leading-relaxed">
-              {analysis.explanation}
+              {analysis?.explanation ?? "AI analysis was unavailable for this scan."}
             </p>
           </div>
         </motion.div>
       </div>
 
       {/* Phishing Indicators */}
-      {analysis.indicators.length > 0 && (
+      {analysis && analysis.indicators.length > 0 && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -125,7 +125,7 @@ export default function ResultsPage() {
       <Separator className="bg-border/40 my-10" />
 
       {/* VirusTotal Detection Stats — collapsible */}
-      <MetadataTable virusTotal={result.virusTotal} />
+      {result.virusTotal && <MetadataTable virusTotal={result.virusTotal} />}
 
       <Separator className="bg-border/40 my-10" />
 

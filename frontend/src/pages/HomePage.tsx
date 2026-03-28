@@ -339,9 +339,9 @@ export default function HomePage() {
 
                   {/* Iframe container */}
                   <div className="relative w-full" style={{ aspectRatio: "16/9" }}>
-                    {/* Skeleton placeholder */}
+                    {/* Skeleton loader shown until iframe navigates to real content */}
                     {!iframeLoaded && (
-                      <div className="absolute inset-0 bg-secondary/30 animate-pulse flex items-center justify-center">
+                      <div className="absolute inset-0 bg-secondary/30 animate-pulse flex items-center justify-center z-10">
                         <Loader2 className="w-8 h-8 text-primary/40 animate-spin" />
                       </div>
                     )}
@@ -349,9 +349,18 @@ export default function HomePage() {
                     <iframe
                       src={streamingUrl}
                       title="TinyFish Live Browser"
-                      className="w-full h-full border-0"
+                      className={`w-full h-full border-0 transition-opacity duration-300 ${iframeLoaded ? "opacity-100" : "opacity-0"}`}
                       sandbox="allow-scripts allow-same-origin"
-                      onLoad={() => setIframeLoaded(true)}
+                      onLoad={(e) => {
+                        // Ignore the initial about:blank load
+                        const frame = e.currentTarget;
+                        try {
+                          if (frame.contentWindow?.location.href === "about:blank") return;
+                        } catch {
+                          // Cross-origin — means real content loaded
+                        }
+                        setIframeLoaded(true);
+                      }}
                     />
 
                     {/* "Analysis Complete" overlay */}

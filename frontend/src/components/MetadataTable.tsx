@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { ChevronDown, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
+import { ChevronDown, ShieldCheck, ShieldAlert, ShieldX, AlertTriangle, Globe, Users, Lock } from "lucide-react";
 import type { VirusTotalResult } from "@/lib/types";
 import { extractVTOverview } from "@/lib/types";
 
@@ -8,36 +8,66 @@ interface MetadataTableProps {
   virusTotal: VirusTotalResult;
 }
 
-function statColor(key: string, value: number): string | undefined {
-  if (key === "malicious" && value > 0) return "text-danger";
-  if (key === "suspicious" && value > 0) return "text-warning";
-  if (key === "harmless" && value > 0) return "text-safe";
-  return undefined;
-}
-
-function Row({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
+function Row({ label, value, color, icon: Icon }: { label: string; value: React.ReactNode; color?: string; icon?: React.ComponentType<{ className?: string }> }) {
   return (
     <div className="flex items-center justify-between px-5 py-3 hover:bg-secondary/30 transition-colors">
-      <span className="text-muted-foreground text-sm">{label}</span>
+      <div className="flex items-center gap-2">
+        {Icon && <Icon className={`w-3.5 h-3.5 ${color || "text-muted-foreground"}`} />}
+        <span className="text-muted-foreground text-sm">{label}</span>
+      </div>
       <span className={`font-mono text-sm ${color || "text-foreground"}`}>{value}</span>
     </div>
   );
+}
+
+function SectionHeader({ title }: { title: string }) {
+  return (
+    <div className="px-5 py-2.5 bg-secondary/20">
+      <span className="text-muted-foreground text-[11px] font-mono uppercase tracking-widest">{title}</span>
+    </div>
+  );
+}
+
+function formatDate(epoch: number): string {
+  return new Date(epoch * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function domainAge(epoch: number): string {
+  const now = globalThis.Date.now() / 1000;
+  const days = Math.floor((now - epoch) / 86400);
+  if (days < 30) return `${days} days (very new)`;
+  if (days < 365) return `${Math.floor(days / 30)} months`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years > 1 ? "s" : ""}`;
+}
+
+function isNewDomainCheck(epoch: number | null): boolean {
+  if (epoch == null) return false;
+  return (globalThis.Date.now() / 1000 - epoch) < 30 * 86400;
 }
 
 export default function MetadataTable({ virusTotal }: MetadataTableProps) {
   const [open, setOpen] = useState(false);
   const vt = extractVTOverview(virusTotal);
 
-  // Determine a quick summary line for the header
   const malCount = vt.stats?.malicious ?? 0;
+  const susCount = vt.stats?.suspicious ?? 0;
+  const safeCount = vt.stats?.harmless ?? 0;
   const totalEngines = vt.stats
     ? vt.stats.malicious + vt.stats.suspicious + vt.stats.harmless + vt.stats.undetected + vt.stats.timeout
     : 0;
-  const SummaryIcon = malCount > 0 ? ShieldX : totalEngines > 0 ? ShieldCheck : ShieldAlert;
-  const summaryColor = malCount > 0 ? "text-danger" : "text-safe";
 
-  // Deduplicate categories — pick unique values
+  const flagged = malCount + susCount;
+  const SummaryIcon = malCount > 0 ? ShieldX : flagged > 0 ? ShieldAlert : totalEngines > 0 ? ShieldCheck : ShieldAlert;
+  const summaryColor = malCount > 0 ? "text-danger" : flagged > 0 ? "text-warning" : "text-safe";
+
   const categoryValues = vt.categories ? [...new Set(Object.values(vt.categories))] : [];
+
+  // Is the domain brand new? (< 30 days)
+  const isNewDomain = isNewDomainCheck(vt.creationDate);
+
+  // Did the URL redirect somewhere else?
+  const redirected = vt.lastFinalUrl && vt.lastFinalUrl !== virusTotal.url;
 
   return (
     <motion.div
@@ -57,7 +87,7 @@ export default function MetadataTable({ virusTotal }: MetadataTableProps) {
           </h3>
           {totalEngines > 0 && (
             <span className={`font-mono text-xs ${summaryColor}`}>
-              {malCount}/{totalEngines} engines flagged
+              {flagged}/{totalEngines} engines flagged
             </span>
           )}
         </div>
@@ -83,70 +113,92 @@ export default function MetadataTable({ virusTotal }: MetadataTableProps) {
                 </div>
               ) : (
                 <>
-                  {/* Detection stats */}
-                  <div className="px-5 py-3">
-                    <span className="text-muted-foreground text-[11px] font-mono uppercase tracking-widest">Detection Stats</span>
-                  </div>
-                  <Row label="Malicious" value={vt.stats.malicious} color={statColor("malicious", vt.stats.malicious)} />
-                  <Row label="Suspicious" value={vt.stats.suspicious} color={statColor("suspicious", vt.stats.suspicious)} />
-                  <Row label="Harmless" value={vt.stats.harmless} color={statColor("harmless", vt.stats.harmless)} />
-                  <Row label="Undetected" value={vt.stats.undetected} />
+                  {/* Threat alerts — only if something bad was found */}
+                  {vt.threatNames.length > 0 && (
+                    <div className="px-5 py-3 bg-danger/5 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-danger mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-danger text-sm font-semibold">Known Threats Detected</p>
+                        <p className="text-danger/80 text-xs mt-0.5">{vt.threatNames.join(", ")}</p>
+                      </div>
+                    </div>
+                  )}
+                  {isNewDomain && (
+                    <div className="px-5 py-3 bg-warning/5 flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-warning mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-warning text-sm font-semibold">Very New Domain</p>
+                        <p className="text-warning/80 text-xs mt-0.5">
+                          This domain was registered less than 30 days ago. Phishing sites are often short-lived.
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
-                  {/* Site info */}
-                  <div className="px-5 py-3">
-                    <span className="text-muted-foreground text-[11px] font-mono uppercase tracking-widest">Site Info</span>
-                  </div>
-                  {vt.title && <Row label="Page Title" value={vt.title} />}
-                  {vt.lastFinalUrl && (
+                  {/* Security scanners */}
+                  <SectionHeader title="Security Scanners" />
+                  <Row label="Flagged as dangerous" value={`${malCount} of ${totalEngines} engines`} color={malCount > 0 ? "text-danger" : "text-safe"} icon={ShieldX} />
+                  {susCount > 0 && (
+                    <Row label="Flagged as suspicious" value={`${susCount} engines`} color="text-warning" icon={ShieldAlert} />
+                  )}
+                  <Row label="Confirmed safe" value={`${safeCount} engines`} color="text-safe" icon={ShieldCheck} />
+
+                  {/* Where does this link go? */}
+                  <SectionHeader title="Where Does This Link Go?" />
+                  {vt.title && <Row label="Page title" value={vt.title} icon={Globe} />}
+                  {redirected && (
                     <Row
-                      label="Final URL"
+                      label="Redirects to"
                       value={
-                        <span className="truncate max-w-[250px] inline-block align-bottom" title={vt.lastFinalUrl}>
+                        <span className="truncate max-w-[250px] inline-block align-bottom text-warning" title={vt.lastFinalUrl!}>
                           {vt.lastFinalUrl}
                         </span>
                       }
-                    />
-                  )}
-                  {vt.httpResponseCode != null && (
-                    <Row
-                      label="HTTP Status"
-                      value={vt.httpResponseCode}
-                      color={vt.httpResponseCode >= 400 ? "text-danger" : undefined}
+                      color="text-warning"
+                      icon={AlertTriangle}
                     />
                   )}
                   {categoryValues.length > 0 && (
-                    <Row label="Categories" value={categoryValues.join(", ")} />
+                    <Row label="Site category" value={categoryValues.join(", ")} icon={Globe} />
                   )}
 
-                  {/* Reputation & community */}
-                  <div className="px-5 py-3">
-                    <span className="text-muted-foreground text-[11px] font-mono uppercase tracking-widest">Community</span>
-                  </div>
-                  {vt.reputation != null && (
+                  {/* Trust & history */}
+                  <SectionHeader title="Trust & History" />
+                  {vt.creationDate != null && (
                     <Row
-                      label="Reputation Score"
-                      value={vt.reputation}
-                      color={vt.reputation < 0 ? "text-danger" : vt.reputation > 0 ? "text-safe" : undefined}
+                      label="Domain age"
+                      value={domainAge(vt.creationDate)}
+                      color={isNewDomain ? "text-warning" : "text-safe"}
+                      icon={Globe}
                     />
                   )}
-                  {vt.totalVotes && (
-                    <>
-                      <Row label="Community \u2191 Harmless" value={vt.totalVotes.harmless} color="text-safe" />
-                      <Row label="Community \u2193 Malicious" value={vt.totalVotes.malicious} color={vt.totalVotes.malicious > 0 ? "text-danger" : undefined} />
-                    </>
+                  {vt.certificate && (
+                    <Row
+                      label="SSL certificate"
+                      value={`Issued by ${vt.certificate.issuer}`}
+                      icon={Lock}
+                    />
                   )}
-                  {vt.timesSubmitted != null && (
-                    <Row label="Times Submitted" value={vt.timesSubmitted.toLocaleString()} />
+                  {vt.totalVotes && (vt.totalVotes.harmless > 0 || vt.totalVotes.malicious > 0) && (
+                    <Row
+                      label="Community votes"
+                      value={`${vt.totalVotes.harmless} safe \u00B7 ${vt.totalVotes.malicious} dangerous`}
+                      color={vt.totalVotes.malicious > vt.totalVotes.harmless ? "text-danger" : "text-safe"}
+                      icon={Users}
+                    />
                   )}
-
-                  {/* Threat names (if any) */}
-                  {vt.threatNames.length > 0 && (
-                    <>
-                      <div className="px-5 py-3">
-                        <span className="text-muted-foreground text-[11px] font-mono uppercase tracking-widest">Threats</span>
-                      </div>
-                      <Row label="Threat Names" value={vt.threatNames.join(", ")} color="text-danger" />
-                    </>
+                  {vt.timesSubmitted != null && vt.timesSubmitted > 1 && (
+                    <Row
+                      label="Times reported"
+                      value={`${vt.timesSubmitted.toLocaleString()} submissions`}
+                      icon={Users}
+                    />
+                  )}
+                  {vt.registrar && (
+                    <Row label="Registered through" value={vt.registrar} icon={Globe} />
+                  )}
+                  {vt.lastAnalysisDate != null && (
+                    <Row label="Last scanned" value={formatDate(vt.lastAnalysisDate)} icon={ShieldCheck} />
                   )}
                 </>
               )}
