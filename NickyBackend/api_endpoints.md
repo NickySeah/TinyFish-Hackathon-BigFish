@@ -10,31 +10,6 @@ Checks database connectivity.
 
 ---
 
-## URL Endpoints
-
-### GET /urls
-Removed after schema migration.
-
-### GET /urls/{url_id}
-Removed after schema migration.
-
-### GET /urls/by-original?original_url=...
-Removed after schema migration.
-
-### POST /urls
-Removed after schema migration.
-
-### PATCH /urls/{url_id}
-Removed after schema migration.
-
-### DELETE /urls/{url_id}
-Removed after schema migration.
-
-### GET /urls/{url_id}/scans
-Removed after schema migration.
-
----
-
 ## URL Sources Endpoints
 
 ### GET /url-sources
