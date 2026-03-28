@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Secrets
 .env
 
@@ -15,3 +16,6 @@ Thumbs.db
 
 # Build artifacts
 dist/
+=======
+.claude
+>>>>>>> 65ec130b0215d8960ea1e578061fedb10f9251bc
