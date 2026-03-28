@@ -1,6 +1,7 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
 import { Fish } from "lucide-react";
 import { motion } from "motion/react";
+import ScanHistoryDropdown from "./ScanHistoryDropdown";
 
 export default function Layout() {
   const location = useLocation();
@@ -19,18 +20,8 @@ export default function Layout() {
               Tiny<span className="text-primary">Phish</span>
             </span>
           </Link>
-          <nav className="flex items-center gap-1">
-            <Link
-              to="/"
-              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                location.pathname === "/"
-                  ? "text-primary bg-primary/10"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              Scan
-            </Link>
-          </nav>
+
+          <ScanHistoryDropdown />
         </div>
       </header>
 

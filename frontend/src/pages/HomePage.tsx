@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { toast } from "sonner";
-import { Fish, Globe, Search, Loader2 } from "lucide-react";
+import { Fish, Globe, Search, Loader2, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { analyzeUrl } from "@/lib/api";
+import { addScanToHistory } from "@/lib/scanHistory";
 
 const SOURCES = [
   "Email",
@@ -25,11 +26,16 @@ const SOURCES = [
 ];
 
 const SCAN_STAGES = [
-  "Connecting to target...",
-  "Scraping page content...",
-  "Analyzing with AI...",
-  "Generating report...",
+  { key: "connecting", label: "Connecting to target..." },
+  { key: "scraping", label: "Scraping page content..." },
+  { key: "analyzing", label: "Analyzing with AI..." },
+  { key: "generating", label: "Generating report..." },
 ];
+
+function stageIndex(stage: string): number {
+  const idx = SCAN_STAGES.findIndex((s) => s.key === stage);
+  return idx >= 0 ? idx : 0;
+}
 
 function isValidUrl(str: string): boolean {
   try {
@@ -48,6 +54,10 @@ export default function HomePage() {
   const [errors, setErrors] = useState<{ url?: string; source?: string }>({});
   const [isScanning, setIsScanning] = useState(false);
   const [scanStage, setScanStage] = useState(0);
+  const [streamingUrl, setStreamingUrl] = useState<string | null>(null);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [scanComplete, setScanComplete] = useState(false);
+  const streamFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const validate = () => {
     const newErrors: { url?: string; source?: string } = {};
@@ -69,31 +79,60 @@ export default function HomePage() {
 
     setIsScanning(true);
     setScanStage(0);
+    setStreamingUrl(null);
+    setIframeLoaded(false);
+    setScanComplete(false);
 
-    // Advance through scan stages
-    const interval = setInterval(() => {
-      setScanStage((prev) => {
-        if (prev < SCAN_STAGES.length - 1) return prev + 1;
-        return prev;
-      });
-    }, 800);
+    // Fallback: if no streaming URL arrives within 5s, stay with spinner
+    streamFallbackTimer.current = setTimeout(() => {
+      // no-op — spinner stays visible if streamingUrl is null
+    }, 5000);
+
+    const normalizedUrl = url.trim().startsWith("http")
+      ? url.trim()
+      : `https://${url.trim()}`;
 
     try {
-      const normalizedUrl = url.trim().startsWith("http")
-        ? url.trim()
-        : `https://${url.trim()}`;
+      const result = await analyzeUrl(
+        {
+          url: normalizedUrl,
+          source,
+          sourceDetail: source === "Other" ? sourceDetail : undefined,
+        },
+        {
+          onStreamUrl: (sUrl) => {
+            if (streamFallbackTimer.current) clearTimeout(streamFallbackTimer.current);
+            setStreamingUrl(sUrl);
+          },
+          onStatus: (stage) => {
+            setScanStage(stageIndex(stage));
+          },
+          onResult: (res) => {
+            // Save to history
+            addScanToHistory({
+              scanId: res.scanId || `scan-${Date.now()}`,
+              url: res.url,
+              source,
+              scannedAt: res.analyzedAt,
+              finalVerdict: res.finalVerdict,
+              confidenceScore: res.confidenceScore,
+            });
 
-      const result = await analyzeUrl({
-        url: normalizedUrl,
-        source,
-        sourceDetail: source === "Other" ? sourceDetail : undefined,
-      });
+            setScanComplete(true);
+            // Brief delay to show "complete" state before navigating
+            setTimeout(() => {
+              navigate("/results", { state: res });
+            }, 800);
+          },
+        }
+      );
 
-      clearInterval(interval);
-      navigate("/results", { state: result });
+      // If onResult callback didn't fire (shouldn't happen, but safety)
+      if (!result) return;
     } catch (err) {
-      clearInterval(interval);
+      if (streamFallbackTimer.current) clearTimeout(streamFallbackTimer.current);
       setIsScanning(false);
+      setStreamingUrl(null);
       toast.error(
         err instanceof Error ? err.message : "Analysis failed. Please try again."
       );
@@ -262,29 +301,102 @@ export default function HomePage() {
             </motion.form>
           </motion.div>
         ) : (
-          /* Scanning Animation */
+          /* Scanning State — Live Browser + Progress */
           <motion.div
             key="scanning"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="flex flex-col items-center justify-center min-h-[60vh] text-center"
+            className="flex flex-col items-center justify-center min-h-[60vh]"
           >
-            <motion.div
-              className="relative w-24 h-24 mb-10"
-              animate={{ rotate: 360 }}
-              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-            >
-              <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
-              <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primary" />
-              <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-cyan" />
-              <div className="absolute inset-0 blur-xl bg-primary/20 rounded-full" />
-            </motion.div>
+            {/* Live Browser Stream */}
+            {streamingUrl ? (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.4 }}
+                className="w-full max-w-3xl mb-8"
+              >
+                {/* Browser chrome frame */}
+                <div className="rounded-xl border border-border/60 overflow-hidden bg-card/30 shadow-2xl shadow-black/30">
+                  {/* Top bar */}
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-secondary/40 border-b border-border/40">
+                    <div className="flex items-center gap-2">
+                      <div className="flex gap-1.5">
+                        <span className="w-3 h-3 rounded-full bg-danger/60" />
+                        <span className="w-3 h-3 rounded-full bg-warning/60" />
+                        <span className="w-3 h-3 rounded-full bg-safe/60" />
+                      </div>
+                      <span className="font-mono text-[11px] text-muted-foreground/60 ml-2 truncate max-w-xs">
+                        {url.length > 50 ? url.slice(0, 50) + "..." : url}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <motion.span
+                        className="w-2 h-2 rounded-full bg-red-500"
+                        animate={{ opacity: scanComplete ? 0 : [1, 0.3, 1] }}
+                        transition={{ duration: 1.2, repeat: Infinity }}
+                      />
+                      <span className="font-mono text-[10px] font-bold tracking-widest text-red-400 uppercase">
+                        {scanComplete ? "Done" : "Live"}
+                      </span>
+                    </div>
+                  </div>
 
+                  {/* Iframe container */}
+                  <div className="relative w-full" style={{ aspectRatio: "16/9" }}>
+                    {/* Skeleton placeholder */}
+                    {!iframeLoaded && (
+                      <div className="absolute inset-0 bg-secondary/30 animate-pulse flex items-center justify-center">
+                        <Loader2 className="w-8 h-8 text-primary/40 animate-spin" />
+                      </div>
+                    )}
+
+                    <iframe
+                      src={streamingUrl}
+                      title="TinyFish Live Browser"
+                      className="w-full h-full border-0"
+                      sandbox="allow-scripts allow-same-origin"
+                      onLoad={() => setIframeLoaded(true)}
+                    />
+
+                    {/* "Analysis Complete" overlay */}
+                    <AnimatePresence>
+                      {scanComplete && (
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="absolute inset-0 bg-background/80 backdrop-blur-sm flex flex-col items-center justify-center"
+                        >
+                          <CheckCircle2 className="w-10 h-10 text-safe mb-3" />
+                          <span className="font-heading text-sm font-bold text-foreground">
+                            Analysis Complete
+                          </span>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </div>
+              </motion.div>
+            ) : (
+              /* Fallback spinner when no streaming URL */
+              <motion.div
+                className="relative w-24 h-24 mb-10"
+                animate={{ rotate: 360 }}
+                transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+              >
+                <div className="absolute inset-0 rounded-full border-2 border-primary/20" />
+                <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-primary" />
+                <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-cyan" />
+                <div className="absolute inset-0 blur-xl bg-primary/20 rounded-full" />
+              </motion.div>
+            )}
+
+            {/* Progress stages */}
             <div className="font-mono text-sm space-y-3 text-left max-w-xs">
               {SCAN_STAGES.map((stage, i) => (
                 <motion.div
-                  key={stage}
+                  key={stage.key}
                   initial={{ opacity: 0, x: -10 }}
                   animate={
                     i <= scanStage
@@ -310,7 +422,7 @@ export default function HomePage() {
                           : "text-muted-foreground/30"
                     }
                   >
-                    {stage}
+                    {stage.label}
                   </span>
                 </motion.div>
               ))}

@@ -46,31 +46,40 @@ export default function ResultsPage() {
         </div>
       </motion.div>
 
-      {/* Score + Metadata grid */}
+      {/* Score + AI Summary */}
       <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-8 md:gap-12 mb-10">
         <ConfidenceGauge score={result.confidenceScore} />
-        <MetadataTable metadata={result.metadata} />
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.5 }}
+          className="relative bg-card/50 backdrop-blur-sm rounded-lg border border-border/50 overflow-hidden transition-all duration-300 hover:shadow-xl shadow-cyan/8 hover:border-border/80"
+        >
+          {/* Top accent bar */}
+          <div className="h-0.5 bg-cyan opacity-60" />
+
+          <div className="p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div className="p-2 rounded-md bg-cyan/5 border border-border/30">
+                <Sparkles className="w-4 h-4 text-cyan" />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan animate-pulse" />
+                <span className="font-mono text-[10px] uppercase tracking-widest text-cyan">
+                  AI Summary
+                </span>
+              </div>
+            </div>
+
+            <h3 className="font-heading text-sm font-bold text-foreground mb-3 tracking-tight">
+              Analysis Overview
+            </h3>
+            <p className="text-muted-foreground text-sm leading-relaxed">
+              {result.aiSummary}
+            </p>
+          </div>
+        </motion.div>
       </div>
-
-      <Separator className="bg-border/40 my-10" />
-
-      {/* AI Summary */}
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, delay: 0.5 }}
-        className="bg-card/60 backdrop-blur-sm rounded-lg border border-border/60 border-l-[3px] border-l-cyan p-6 mb-10"
-      >
-        <div className="flex items-center gap-2 mb-4">
-          <Sparkles className="w-4 h-4 text-cyan" />
-          <h3 className="font-heading text-sm font-bold text-foreground">
-            AI Analysis
-          </h3>
-        </div>
-        <p className="text-foreground/85 text-sm leading-relaxed">
-          {result.aiSummary}
-        </p>
-      </motion.div>
 
       {/* Risk Breakdown */}
       <motion.div
@@ -87,6 +96,11 @@ export default function ResultsPage() {
           ))}
         </div>
       </motion.div>
+
+      <Separator className="bg-border/40 my-10" />
+
+      {/* Site Metadata — collapsible */}
+      <MetadataTable metadata={result.metadata} />
 
       <Separator className="bg-border/40 my-10" />
 

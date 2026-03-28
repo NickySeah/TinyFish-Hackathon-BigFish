@@ -1,5 +1,4 @@
 import { motion } from "motion/react";
-import { Badge } from "@/components/ui/badge";
 import {
   Fish,
   AlertTriangle,
@@ -7,6 +6,9 @@ import {
   Lock,
   Clock,
   ExternalLink,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
 } from "lucide-react";
 import type { RiskCategory } from "@/lib/types";
 
@@ -19,21 +21,33 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
   "External Resources": Fish,
 };
 
-const LEVEL_STYLES = {
+const LEVEL_CONFIG = {
   safe: {
-    badge: "bg-safe/15 text-safe border-safe/30 hover:bg-safe/15",
-    border: "border-l-safe",
-    text: "Safe",
+    label: "Clear",
+    StatusIcon: ShieldCheck,
+    glow: "shadow-safe/8",
+    accent: "text-safe",
+    bg: "bg-safe/5",
+    dot: "bg-safe",
+    bar: "bg-safe",
   },
   warning: {
-    badge: "bg-warning/15 text-warning border-warning/30 hover:bg-warning/15",
-    border: "border-l-warning",
-    text: "Warning",
+    label: "Suspicious",
+    StatusIcon: ShieldAlert,
+    glow: "shadow-warning/8",
+    accent: "text-warning",
+    bg: "bg-warning/5",
+    dot: "bg-warning",
+    bar: "bg-warning",
   },
   danger: {
-    badge: "bg-danger/15 text-danger border-danger/30 hover:bg-danger/15",
-    border: "border-l-danger",
-    text: "Danger",
+    label: "Threat",
+    StatusIcon: ShieldX,
+    glow: "shadow-danger/10",
+    accent: "text-danger",
+    bg: "bg-danger/5",
+    dot: "bg-danger",
+    bar: "bg-danger",
   },
 };
 
@@ -44,32 +58,42 @@ interface RiskCardProps {
 
 export default function RiskCard({ category, index }: RiskCardProps) {
   const Icon = CATEGORY_ICONS[category.name] || AlertTriangle;
-  const style = LEVEL_STYLES[category.level];
+  const cfg = LEVEL_CONFIG[category.level];
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 16 }}
+      initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: 0.1 * index + 0.3 }}
-      className={`group bg-card/60 backdrop-blur-sm rounded-lg border border-border/60 border-l-[3px] ${style.border} p-5 transition-all hover:bg-card/80 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary/5`}
+      transition={{ duration: 0.35, delay: 0.08 * index + 0.3, ease: "easeOut" }}
+      className={`group relative bg-card/50 backdrop-blur-sm rounded-lg border border-border/50 overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-xl ${cfg.glow} hover:border-border/80`}
     >
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2.5">
-          <Icon className="w-4 h-4 text-muted-foreground shrink-0" />
-          <h3 className="font-heading text-sm font-bold text-foreground">
-            {category.name}
-          </h3>
+      {/* Top accent bar */}
+      <div className={`h-0.5 ${cfg.bar} opacity-60`} />
+
+      <div className="p-5">
+        {/* Icon + Status row */}
+        <div className="flex items-start justify-between mb-4">
+          <div className={`p-2 rounded-md ${cfg.bg} border border-border/30`}>
+            <Icon className={`w-4 h-4 ${cfg.accent}`} />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className={`inline-block w-1.5 h-1.5 rounded-full ${cfg.dot} animate-pulse`} />
+            <span className={`font-mono text-[10px] uppercase tracking-widest ${cfg.accent}`}>
+              {cfg.label}
+            </span>
+          </div>
         </div>
-        <Badge
-          variant="outline"
-          className={`text-[10px] font-mono uppercase tracking-wider px-2 py-0.5 ${style.badge}`}
-        >
-          {style.text}
-        </Badge>
+
+        {/* Title */}
+        <h3 className="font-heading text-sm font-bold text-foreground mb-2 tracking-tight">
+          {category.name}
+        </h3>
+
+        {/* Description */}
+        <p className="text-muted-foreground text-xs leading-relaxed line-clamp-3">
+          {category.description}
+        </p>
       </div>
-      <p className="text-muted-foreground text-sm leading-relaxed">
-        {category.description}
-      </p>
     </motion.div>
   );
 }
